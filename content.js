@@ -16,7 +16,8 @@ const state = {
   filtersCollapsed: false,
   commentCache: {}, // Cache comments by story ID
   summaryCache: {}, // Cache summaries by story ID (local copy for quick access)
-  summaryStatus: {} // Track summary loading status: 'loading', 'ready', or null
+  summaryStatus: {}, // Track summary loading status: 'loading', 'ready', or null
+  scrollPositions: {} // Remember scroll position for each story ID
 };
 
 // Initialize the extension
@@ -27,13 +28,15 @@ async function init() {
     filterSettings = {},
     filtersCollapsed = false,
     commentCache = {},
-    summaryCache = {}
-  } = await chrome.storage.local.get(['readStories', 'filterSettings', 'filtersCollapsed', 'commentCache', 'summaryCache']);
+    summaryCache = {},
+    scrollPositions = {}
+  } = await chrome.storage.local.get(['readStories', 'filterSettings', 'filtersCollapsed', 'commentCache', 'summaryCache', 'scrollPositions']);
 
   state.readStories = new Set(readStories);
   state.filtersCollapsed = filtersCollapsed;
   state.commentCache = commentCache;
   state.summaryCache = summaryCache;
+  state.scrollPositions = scrollPositions;
 
   // Load saved filter settings
   if (filterSettings.minPoints !== undefined) state.filters.minPoints = filterSettings.minPoints;
@@ -242,6 +245,13 @@ function saveFilterSettings() {
   });
 }
 
+// Save scroll positions to storage
+function saveScrollPositions() {
+  chrome.storage.local.set({
+    scrollPositions: state.scrollPositions
+  });
+}
+
 // Render the story list in the sidebar
 function renderStoryList() {
   const storyListEl = document.getElementById('story-list');
@@ -333,6 +343,15 @@ function updateSummaryStatus(storyId, status) {
 function selectStory(index) {
   if (index < 0 || index >= state.filteredStories.length) return;
 
+  // Save current scroll position before switching stories
+  if (state.selectedStory) {
+    const mainPanel = document.getElementById('main-panel');
+    if (mainPanel) {
+      state.scrollPositions[state.selectedStory.id] = mainPanel.scrollTop;
+      saveScrollPositions();
+    }
+  }
+
   state.selectedStoryIndex = index;
   state.selectedStory = state.filteredStories[index];
 
@@ -389,6 +408,18 @@ async function renderStoryDetail() {
   if (openBtn) {
     openBtn.addEventListener('click', () => openArticle());
   }
+
+  // Restore scroll position for this story (after DOM updates)
+  requestAnimationFrame(() => {
+    const mainPanelElement = document.getElementById('main-panel');
+    const savedScrollPosition = state.scrollPositions[story.id];
+    if (savedScrollPosition !== undefined && mainPanelElement) {
+      mainPanelElement.scrollTop = savedScrollPosition;
+    } else if (mainPanelElement) {
+      // New story - scroll to top
+      mainPanelElement.scrollTop = 0;
+    }
+  });
 
   // Check if we have cached comments
   const cachedComments = state.commentCache[story.id];
