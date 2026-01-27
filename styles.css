@@ -211,6 +211,32 @@ body {
   color: #999;
 }
 
+/* Summary status indicators */
+.summary-status {
+  margin-left: 8px;
+  font-size: 14px;
+  display: inline-block;
+  font-weight: 600;
+}
+
+.summary-status.loading {
+  color: #ff6600;
+  animation: spin 1s linear infinite;
+}
+
+.summary-status.ready {
+  color: #28a745;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Main panel */
 #main-panel {
   flex: 1;
@@ -364,6 +390,11 @@ body {
 .summary-content strong {
   font-weight: 600;
   color: #1a1a1a;
+}
+
+.loading-text {
+  color: #999;
+  font-style: italic;
 }
 
 .summary-loading {

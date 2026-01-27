@@ -29,6 +29,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     generateSummary(request.story, request.comments).then(sendResponse);
     return true;
   }
+
+  if (request.action === 'generateDiscussionSummary') {
+    generateDiscussionSummary(request.story, request.comments).then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'generateArticleSummary') {
+    generateArticleSummary(request.story).then(sendResponse);
+    return true;
+  }
 });
 
 // Fetch top story IDs from HN API
@@ -116,6 +126,64 @@ async function generateSummary(story, comments) {
   }
 }
 
+// Generate discussion summary only (faster, no article fetch)
+async function generateDiscussionSummary(story, comments) {
+  try {
+    // Get API key
+    const { apiKey } = await chrome.storage.local.get('apiKey');
+    if (!apiKey) {
+      return { success: false, error: 'No API key configured.' };
+    }
+
+    // Prepare comments text (limit to top 50 comments)
+    const limitedComments = limitCommentsDepth(comments, 50);
+    const commentsText = flattenComments(limitedComments).join('\n\n---\n\n');
+
+    // Build discussion-only prompt
+    const prompt = buildDiscussionPrompt(story, commentsText);
+
+    // Call Claude API
+    const summary = await callClaudeAPISimple(apiKey, prompt);
+
+    return { success: true, summary };
+  } catch (error) {
+    console.error('Discussion summary error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Generate article summary only
+async function generateArticleSummary(story) {
+  try {
+    // Get API key
+    const { apiKey } = await chrome.storage.local.get('apiKey');
+    if (!apiKey) {
+      return { success: false, error: 'No API key configured.' };
+    }
+
+    // Fetch article content
+    if (!story.url) {
+      return { success: false, error: 'No article URL' };
+    }
+
+    const articleResult = await fetchArticleContent(story.url);
+    if (!articleResult.success) {
+      return { success: false, error: 'Failed to fetch article' };
+    }
+
+    // Build article-only prompt
+    const prompt = buildArticlePrompt(story, articleResult.content);
+
+    // Call Claude API
+    const summary = await callClaudeAPISimple(apiKey, prompt);
+
+    return { success: true, summary };
+  } catch (error) {
+    console.error('Article summary error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
 // Call Claude API to generate summary
 async function callClaudeAPI(apiKey, story, articleContent, commentsText) {
   console.log(`[HN Inbox] Generating summary for story: ${story.id} - ${story.title}`);
@@ -190,10 +258,10 @@ function buildSummaryPrompt(story, articleContent, commentsText) {
 Story Title: ${story.title}
 ${story.url ? `Article URL: ${story.url}` : 'No article URL (Ask HN, Show HN, or discussion)'}
 
-${hasArticle ? `ARTICLE CONTENT:\n${articleContent.slice(0, 15000)}\n\n` : ''}
+${hasArticle ? `ARTICLE CONTENT:\n${articleContent.slice(0, 5000)}\n\n` : ''}
 
 HACKER NEWS DISCUSSION (${story.descendants || 0} comments):
-${commentsText.slice(0, 20000)}
+${commentsText.slice(0, 10000)}
 
 Please analyze this and provide:
 1. A 2-3 sentence summary of ${hasArticle ? 'the article content' : 'the discussion topic'}
@@ -246,6 +314,108 @@ function flattenComments(comments, depth = 0) {
   }
 
   return flattened;
+}
+
+// Limit comments to top N comments (for faster processing)
+function limitCommentsDepth(comments, maxCount) {
+  if (!comments || comments.length === 0) return [];
+
+  let count = 0;
+  const limited = [];
+
+  function collectComments(commentList) {
+    for (const comment of commentList) {
+      if (count >= maxCount) break;
+      if (!comment || comment.deleted || comment.dead) continue;
+
+      limited.push(comment);
+      count++;
+
+      // Include immediate replies for context (but they don't count toward limit for top-level)
+      if (comment.replies && comment.replies.length > 0 && count < maxCount) {
+        collectComments(comment.replies);
+      }
+    }
+  }
+
+  collectComments(comments);
+  return limited;
+}
+
+// Build prompt for discussion-only summary
+function buildDiscussionPrompt(story, commentsText) {
+  return `You are summarizing a Hacker News discussion. Return ONLY a JSON object in this format:
+
+{
+  "discussionSummary": "2-3 sentence summary of the main discussion themes",
+  "interestingComments": [
+    {
+      "author": "username",
+      "snippet": "First ~100 chars of comment",
+      "reason": "One sentence why it's interesting"
+    }
+  ]
+}
+
+Story: ${story.title}
+${story.url ? `URL: ${story.url}` : 'Discussion-only post'}
+
+HN Comments (${story.descendants || 0} total):
+${commentsText.slice(0, 10000)}
+
+Provide:
+1. 2-3 sentence summary of main discussion themes
+2. 3-5 most interesting/insightful comments with reasons
+
+Return ONLY the JSON, no other text.`;
+}
+
+// Build prompt for article-only summary
+function buildArticlePrompt(story, articleContent) {
+  return `Summarize this article in 2-3 sentences. Return ONLY a JSON object:
+
+{
+  "articleSummary": "2-3 sentence summary of the article"
+}
+
+Article Title: ${story.title}
+Article URL: ${story.url}
+
+Article Content:
+${articleContent.slice(0, 5000)}
+
+Return ONLY the JSON, no other text.`;
+}
+
+// Simplified Claude API call
+async function callClaudeAPISimple(apiKey, prompt) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: prompt
+      }]
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Claude API request failed');
+  }
+
+  const data = await response.json();
+  const responseText = data.content[0].text;
+
+  return parseSummaryResponse(responseText);
 }
 
 // Strip HTML tags from comment text

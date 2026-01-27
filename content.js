@@ -15,7 +15,8 @@ const state = {
   keyboardHelpVisible: false,
   filtersCollapsed: false,
   commentCache: {}, // Cache comments by story ID
-  summaryCache: {} // Cache summaries by story ID (local copy for quick access)
+  summaryCache: {}, // Cache summaries by story ID (local copy for quick access)
+  summaryStatus: {} // Track summary loading status: 'loading', 'ready', or null
 };
 
 // Initialize the extension
@@ -265,12 +266,22 @@ function renderStoryList() {
     const domain = story.url ? new URL(story.url).hostname.replace('www.', '') : 'news.ycombinator.com';
     const commentCount = story.descendants || 0;
 
+    // Get summary status
+    const summaryStatus = state.summaryStatus[story.id];
+    let statusIcon = '';
+    if (summaryStatus === 'loading') {
+      statusIcon = '<span class="summary-status loading" title="Generating summary...">⟳</span>';
+    } else if (summaryStatus === 'ready') {
+      statusIcon = '<span class="summary-status ready" title="Summary ready">✓</span>';
+    }
+
     storyEl.innerHTML = `
       <div class="story-title">${escapeHtml(story.title)}</div>
       <div class="story-meta">
         <span class="points">${story.score} points</span>
         <span class="comments">${commentCount} comments</span>
         <span class="domain">${escapeHtml(domain)}</span>
+        ${statusIcon}
       </div>
     `;
 
@@ -285,6 +296,37 @@ function renderStoryList() {
 // Update story count display
 function updateStoryCount() {
   document.getElementById('story-count').textContent = state.filteredStories.length;
+}
+
+// Update summary status indicator for a specific story
+function updateSummaryStatus(storyId, status) {
+  state.summaryStatus[storyId] = status;
+
+  // Find and update the story item in the sidebar
+  const storyIndex = state.filteredStories.findIndex(s => s.id === storyId);
+  if (storyIndex === -1) return;
+
+  const storyItems = document.querySelectorAll('.story-item');
+  const storyEl = storyItems[storyIndex];
+  if (!storyEl) return;
+
+  // Remove existing status icon
+  const existingStatus = storyEl.querySelector('.summary-status');
+  if (existingStatus) {
+    existingStatus.remove();
+  }
+
+  // Add new status icon
+  const metaEl = storyEl.querySelector('.story-meta');
+  if (metaEl && status) {
+    let statusIcon = '';
+    if (status === 'loading') {
+      statusIcon = '<span class="summary-status loading" title="Generating summary...">⟳</span>';
+    } else if (status === 'ready') {
+      statusIcon = '<span class="summary-status ready" title="Summary ready">✓</span>';
+    }
+    metaEl.insertAdjacentHTML('beforeend', statusIcon);
+  }
 }
 
 // Select a story and display it in the main panel
@@ -383,13 +425,14 @@ async function renderStoryDetail() {
   const cachedSummary = state.summaryCache[story.id];
   if (cachedSummary) {
     console.log(`[HN Inbox] Using cached summary for story ${story.id}`);
-    displaySummary(cachedSummary);
+    displayPartialSummary(cachedSummary, false);
+    updateSummaryStatus(story.id, 'ready');
   } else {
-    // Generate AI summary (runs in parallel with comment rendering)
+    // Generate AI summary with progressive loading
     generateAndDisplaySummary(story, commentsData);
   }
 
-  // Preload next story's comments in background
+  // Preload next story's comments AND summary in background
   preloadNextStory();
 }
 
@@ -431,36 +474,118 @@ async function fetchCommentData(commentId) {
   };
 }
 
-// Generate and display AI summary
+// Generate and display AI summary (with progressive loading)
 async function generateAndDisplaySummary(story, comments) {
   const summaryEl = document.getElementById('summary-content');
 
+  // Mark as loading
+  updateSummaryStatus(story.id, 'loading');
+
   try {
-    const response = await chrome.runtime.sendMessage({
-      action: 'generateSummary',
+    // Step 1: Generate discussion summary first (faster, no article fetch needed)
+    console.log(`[HN Inbox] Generating discussion summary for story ${story.id}...`);
+    const discussionResponse = await chrome.runtime.sendMessage({
+      action: 'generateDiscussionSummary',
       story,
       comments
     });
 
-    if (!response.success) {
-      summaryEl.innerHTML = `<div class="error-message">${escapeHtml(response.error)}</div>`;
+    if (!discussionResponse.success) {
+      summaryEl.innerHTML = `<div class="error-message">${escapeHtml(discussionResponse.error)}</div>`;
+      updateSummaryStatus(story.id, null);
       return;
     }
 
-    const summary = response.summary;
+    // Display discussion summary immediately
+    displayPartialSummary(discussionResponse.summary, true);
 
-    // Cache the summary locally
-    state.summaryCache[story.id] = summary;
-    chrome.storage.local.get('summaryCache', (data) => {
-      const cache = data.summaryCache || {};
-      cache[story.id] = summary;
-      chrome.storage.local.set({ summaryCache: cache });
-    });
+    // Step 2: Generate article summary in parallel (if URL exists)
+    if (story.url) {
+      console.log(`[HN Inbox] Generating article summary for story ${story.id}...`);
+      const articleResponse = await chrome.runtime.sendMessage({
+        action: 'generateArticleSummary',
+        story
+      });
 
-    displaySummary(summary);
+      if (articleResponse.success) {
+        // Combine and display full summary
+        const fullSummary = {
+          ...discussionResponse.summary,
+          articleSummary: articleResponse.summary.articleSummary
+        };
+
+        displayPartialSummary(fullSummary, false);
+
+        // Cache the full summary
+        state.summaryCache[story.id] = fullSummary;
+        chrome.storage.local.get('summaryCache', (data) => {
+          const cache = data.summaryCache || {};
+          cache[story.id] = fullSummary;
+          chrome.storage.local.set({ summaryCache: cache });
+        });
+      } else {
+        // Cache discussion-only summary
+        state.summaryCache[story.id] = discussionResponse.summary;
+      }
+    } else {
+      // No article URL, just cache discussion summary
+      state.summaryCache[story.id] = discussionResponse.summary;
+    }
+
+    // Mark as ready
+    updateSummaryStatus(story.id, 'ready');
+
   } catch (error) {
     summaryEl.innerHTML = `<div class="error-message">Failed to generate summary: ${escapeHtml(error.message)}</div>`;
+    updateSummaryStatus(story.id, null);
   }
+}
+
+// Display partial or full summary (progressive loading)
+function displayPartialSummary(summary, isPartial) {
+  const summaryEl = document.getElementById('summary-content');
+
+  let articleSummaryHtml = '';
+  if (summary.articleSummary) {
+    articleSummaryHtml = `<p><strong>Article Summary:</strong> ${escapeHtml(summary.articleSummary)}</p>`;
+  } else if (isPartial) {
+    articleSummaryHtml = `<p><strong>Article Summary:</strong> <span class="loading-text">Loading...</span></p>`;
+  }
+
+  let interestingCommentsHtml = '';
+  if (summary.interestingComments && summary.interestingComments.length > 0) {
+    interestingCommentsHtml = `
+      <div class="interesting-comments">
+        <strong>Interesting Comments:</strong>
+        <ul>
+          ${summary.interestingComments.map(comment => `
+            <li>
+              <a href="#" class="comment-link" data-author="${escapeHtml(comment.author)}">
+                ${escapeHtml(comment.author)}
+              </a>: ${escapeHtml(comment.reason)}
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    `;
+  }
+
+  summaryEl.innerHTML = `
+    <div class="summary-content">
+      ${articleSummaryHtml}
+      <p><strong>Discussion Summary:</strong> ${escapeHtml(summary.discussionSummary)}</p>
+      ${interestingCommentsHtml}
+    </div>
+  `;
+
+  // Re-attach click handlers for interesting comments
+  summaryEl.querySelectorAll('.comment-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const author = e.target.dataset.author;
+      scrollToComment(author);
+    });
+  });
 }
 
 // Display the AI-generated summary
@@ -688,21 +813,22 @@ function reattachCommentListeners() {
   });
 }
 
-// Preload comments for next story (OPTIMIZED)
+// Preload comments AND summary for next story (OPTIMIZED)
 async function preloadNextStory() {
   const nextIndex = state.selectedStoryIndex + 1;
   if (nextIndex >= state.filteredStories.length) return;
 
   const nextStory = state.filteredStories[nextIndex];
 
-  // Only preload if not already cached
+  // Preload comments if not cached
+  let commentsData = [];
   if (!state.commentCache[nextStory.id] && nextStory.kids && nextStory.kids.length > 0) {
     console.log(`[HN Inbox] Preloading ${nextStory.kids.length} comments for story ${nextStory.id} in background...`);
 
     const startTime = performance.now();
 
     // Fetch comments ONCE with parallel loading
-    const commentsData = await fetchCommentTree(nextStory.kids);
+    commentsData = await fetchCommentTree(nextStory.kids);
 
     // Render from data (no duplicate fetching!)
     const tempContainer = document.createElement('div');
@@ -718,6 +844,59 @@ async function preloadNextStory() {
 
     const loadTime = performance.now() - startTime;
     console.log(`[HN Inbox] Preloaded comments for story ${nextStory.id} in ${(loadTime / 1000).toFixed(2)}s`);
+  } else if (state.commentCache[nextStory.id]) {
+    // Use cached comments data
+    commentsData = state.commentCache[nextStory.id].data;
+  }
+
+  // Preload summary if not cached
+  if (!state.summaryCache[nextStory.id] && commentsData.length > 0) {
+    console.log(`[HN Inbox] Preloading summary for story ${nextStory.id} in background...`);
+    updateSummaryStatus(nextStory.id, 'loading');
+
+    try {
+      // Generate discussion summary first
+      const discussionResponse = await chrome.runtime.sendMessage({
+        action: 'generateDiscussionSummary',
+        story: nextStory,
+        comments: commentsData
+      });
+
+      if (discussionResponse.success) {
+        let fullSummary = discussionResponse.summary;
+
+        // Generate article summary if URL exists
+        if (nextStory.url) {
+          const articleResponse = await chrome.runtime.sendMessage({
+            action: 'generateArticleSummary',
+            story: nextStory
+          });
+
+          if (articleResponse.success) {
+            fullSummary = {
+              ...discussionResponse.summary,
+              articleSummary: articleResponse.summary.articleSummary
+            };
+          }
+        }
+
+        // Cache the summary
+        state.summaryCache[nextStory.id] = fullSummary;
+        chrome.storage.local.get('summaryCache', (data) => {
+          const cache = data.summaryCache || {};
+          cache[nextStory.id] = fullSummary;
+          chrome.storage.local.set({ summaryCache: cache });
+        });
+
+        updateSummaryStatus(nextStory.id, 'ready');
+        console.log(`[HN Inbox] Preloaded summary for story ${nextStory.id}`);
+      } else {
+        updateSummaryStatus(nextStory.id, null);
+      }
+    } catch (error) {
+      console.error(`[HN Inbox] Failed to preload summary for story ${nextStory.id}:`, error);
+      updateSummaryStatus(nextStory.id, null);
+    }
   }
 }
 
