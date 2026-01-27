@@ -3,6 +3,9 @@
 const HN_API_BASE = 'https://hacker-news.firebaseio.com/v0';
 const JINA_READER_BASE = 'https://r.jina.ai';
 
+// Import cost tracker
+importScripts('cost-tracker.js');
+
 // Listen for messages from content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'fetchStory') {
@@ -37,6 +40,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'generateArticleSummary') {
     generateArticleSummary(request.story).then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'getCostUsage') {
+    costTracker.getCurrentUsage().then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'resetCostUsage') {
+    costTracker.resetUsage().then(sendResponse);
     return true;
   }
 });
@@ -143,7 +156,12 @@ async function generateDiscussionSummary(story, comments) {
     const prompt = buildDiscussionPrompt(story, commentsText);
 
     // Call Claude API
-    const summary = await callClaudeAPISimple(apiKey, prompt);
+    const { summary, usage } = await callClaudeAPISimple(apiKey, prompt);
+
+    // Track usage and cost
+    if (usage) {
+      await costTracker.trackRequest(usage, 'discussion_summary', story.id);
+    }
 
     return { success: true, summary };
   } catch (error) {
@@ -175,7 +193,12 @@ async function generateArticleSummary(story) {
     const prompt = buildArticlePrompt(story, articleResult.content);
 
     // Call Claude API
-    const summary = await callClaudeAPISimple(apiKey, prompt);
+    const { summary, usage } = await callClaudeAPISimple(apiKey, prompt);
+
+    // Track usage and cost
+    if (usage) {
+      await costTracker.trackRequest(usage, 'article_summary', story.id);
+    }
 
     return { success: true, summary };
   } catch (error) {
@@ -232,6 +255,11 @@ async function callClaudeAPI(apiKey, story, articleContent, commentsText) {
   const responseText = data.content[0].text;
 
   console.log('[HN Inbox] Summary generated successfully');
+
+  // Track usage and cost
+  if (data.usage) {
+    await costTracker.trackRequest(data.usage, 'full_summary', story.id);
+  }
 
   // Parse the response to extract structured summary
   return parseSummaryResponse(responseText);
@@ -415,7 +443,11 @@ async function callClaudeAPISimple(apiKey, prompt) {
   const data = await response.json();
   const responseText = data.content[0].text;
 
-  return parseSummaryResponse(responseText);
+  // Return both the parsed summary and usage data for caller to track
+  return {
+    summary: parseSummaryResponse(responseText),
+    usage: data.usage || null
+  };
 }
 
 // Strip HTML tags from comment text
