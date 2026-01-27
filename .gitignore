@@ -1,0 +1,27 @@
+# Chrome extension artifacts
+*.pem
+*.crx
+
+# MacOS
+.DS_Store
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Node modules (if you add build tools later)
+node_modules/
+npm-debug.log*
+
+# Temporary files
+.tmp/
+temp/
+
+# Claude
+.claude/

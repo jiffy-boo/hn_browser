@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Create HN Inbox Icons</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 40px;
+      text-align: center;
+    }
+    h1 {
+      margin-bottom: 30px;
+    }
+    .icons {
+      display: flex;
+      gap: 40px;
+      justify-content: center;
+      align-items: flex-end;
+      margin: 40px 0;
+    }
+    .icon-container {
+      text-align: center;
+    }
+    canvas {
+      border: 1px solid #ddd;
+      display: block;
+      margin: 10px auto;
+    }
+    button {
+      background: #ff6600;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 10px;
+    }
+    button:hover {
+      background: #e65c00;
+    }
+    .instructions {
+      max-width: 600px;
+      margin: 40px auto;
+      text-align: left;
+      background: #f5f5f5;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    .instructions ol {
+      margin-left: 20px;
+    }
+    .instructions li {
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>HN Inbox Icon Generator</h1>
+
+  <div class="icons">
+    <div class="icon-container">
+      <canvas id="icon16" width="16" height="16"></canvas>
+      <button onclick="downloadIcon('icon16', 16)">Download 16x16</button>
+    </div>
+    <div class="icon-container">
+      <canvas id="icon48" width="48" height="48"></canvas>
+      <button onclick="downloadIcon('icon48', 48)">Download 48x48</button>
+    </div>
+    <div class="icon-container">
+      <canvas id="icon128" width="128" height="128"></canvas>
+      <button onclick="downloadIcon('icon128', 128)">Download 128x128</button>
+    </div>
+  </div>
+
+  <div class="instructions">
+    <h2>Instructions:</h2>
+    <ol>
+      <li>Open this HTML file in a browser</li>
+      <li>Click each download button to save the icons</li>
+      <li>Save them to the <code>icons/</code> folder in your extension directory as:
+        <ul>
+          <li>icon16.png</li>
+          <li>icon48.png</li>
+          <li>icon128.png</li>
+        </ul>
+      </li>
+      <li>Reload your extension in Chrome</li>
+    </ol>
+  </div>
+
+  <script>
+    // Draw icons on all canvases
+    function drawIcon(canvasId, size) {
+      const canvas = document.getElementById(canvasId);
+      const ctx = canvas.getContext('2d');
+
+      // Orange background
+      ctx.fillStyle = '#ff6600';
+      ctx.fillRect(0, 0, size, size);
+
+      // White inbox/envelope icon
+      ctx.fillStyle = 'white';
+
+      // Draw envelope shape
+      const padding = size * 0.15;
+      const envelopeWidth = size - (padding * 2);
+      const envelopeHeight = size * 0.6;
+      const envelopeTop = padding + (size * 0.1);
+
+      // Envelope body
+      ctx.fillRect(padding, envelopeTop, envelopeWidth, envelopeHeight);
+
+      // Envelope flap (triangle)
+      ctx.fillStyle = '#cc5200';
+      ctx.beginPath();
+      ctx.moveTo(padding, envelopeTop);
+      ctx.lineTo(size / 2, envelopeTop + envelopeHeight * 0.4);
+      ctx.lineTo(size - padding, envelopeTop);
+      ctx.closePath();
+      ctx.fill();
+
+      // Add a small notification dot if size is large enough
+      if (size >= 48) {
+        ctx.fillStyle = '#00ff00';
+        ctx.beginPath();
+        ctx.arc(size - padding - 4, envelopeTop + 4, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Download icon as PNG
+    function downloadIcon(canvasId, size) {
+      const canvas = document.getElementById(canvasId);
+      const link = document.createElement('a');
+      link.download = `icon${size}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    // Draw all icons on page load
+    drawIcon('icon16', 16);
+    drawIcon('icon48', 48);
+    drawIcon('icon128', 128);
+  </script>
+</body>
+</html>

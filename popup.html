@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HN Inbox Settings</title>
+  <style>
+    body {
+      width: 400px;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #1a1a1a;
+    }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #1a1a1a;
+    }
+
+    .setting-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 8px;
+      color: #4a4a4a;
+    }
+
+    input[type="password"],
+    input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: #ff6600;
+    }
+
+    .help-text {
+      font-size: 12px;
+      color: #999;
+      margin-top: 6px;
+    }
+
+    .help-text a {
+      color: #ff6600;
+      text-decoration: none;
+    }
+
+    .help-text a:hover {
+      text-decoration: underline;
+    }
+
+    button {
+      background: #ff6600;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 10px;
+    }
+
+    button:hover {
+      background: #e65c00;
+    }
+
+    .status {
+      margin-top: 12px;
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+    }
+
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    .status.hidden {
+      display: none;
+    }
+
+    .info-section {
+      margin-top: 30px;
+      padding-top: 20px;
+      border-top: 1px solid #e0e0e0;
+    }
+
+    .info-section h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .info-section p {
+      font-size: 13px;
+      color: #666;
+      line-height: 1.6;
+      margin-bottom: 8px;
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 20px;
+      font-size: 32px;
+    }
+  </style>
+</head>
+<body>
+  <div class="logo">📬</div>
+  <h1>HN Inbox Settings</h1>
+
+  <div class="setting-group">
+    <label for="api-key">Claude API Key</label>
+    <input type="password" id="api-key" placeholder="sk-ant-...">
+    <div class="help-text">
+      Get your API key from <a href="https://console.anthropic.com/" target="_blank">Anthropic Console</a>
+    </div>
+  </div>
+
+  <button id="save-btn">Save Settings</button>
+
+  <div id="status" class="status hidden"></div>
+
+  <div class="info-section">
+    <h2>About</h2>
+    <p>HN Inbox transforms Hacker News into an inbox-style interface with AI-powered summaries.</p>
+    <p><strong>Keyboard Shortcuts:</strong> Press <kbd>?</kbd> on any HN page to view shortcuts.</p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
