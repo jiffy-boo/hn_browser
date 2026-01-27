@@ -10,7 +10,8 @@
   "host_permissions": [
     "https://news.ycombinator.com/*",
     "https://hacker-news.firebaseio.com/*",
-    "https://r.jina.ai/*"
+    "https://r.jina.ai/*",
+    "https://api.anthropic.com/*"
   ],
   "background": {
     "service_worker": "background.js"

@@ -41,13 +41,48 @@ body {
   padding: 20px;
   border-bottom: 1px solid #e0e0e0;
   background: #fafafa;
+  transition: padding 0.2s ease;
+}
+
+#filters-panel.collapsed {
+  padding: 12px 20px;
+}
+
+.filters-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+#filters-panel.collapsed .filters-header {
+  margin-bottom: 0;
 }
 
 #filters-panel h2 {
   font-size: 16px;
   font-weight: 600;
-  margin-bottom: 16px;
   color: #1a1a1a;
+  margin: 0;
+}
+
+.toggle-btn {
+  background: none;
+  border: none;
+  font-size: 16px;
+  color: #666;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.toggle-btn:hover {
+  color: #ff6600;
+}
+
+#filters-content {
+  transition: opacity 0.2s ease;
 }
 
 .filter-group {
@@ -62,23 +97,19 @@ body {
   color: #4a4a4a;
 }
 
-.filter-group input[type="range"] {
+.filter-group input[type="number"] {
   width: 100%;
-  height: 6px;
-  border-radius: 3px;
-  background: #ddd;
-  outline: none;
-  -webkit-appearance: none;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 13px;
+  background: white;
+  font-family: inherit;
 }
 
-.filter-group input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #ff6600;
-  cursor: pointer;
+.filter-group input[type="number"]:focus {
+  outline: none;
+  border-color: #ff6600;
 }
 
 .filter-group select {
@@ -89,6 +120,11 @@ body {
   font-size: 13px;
   background: white;
   cursor: pointer;
+}
+
+.filter-group select:focus {
+  outline: none;
+  border-color: #ff6600;
 }
 
 .filter-stats {
@@ -350,6 +386,7 @@ body {
 /* Comments section */
 .comments-section {
   margin-top: 32px;
+  text-align: left;
 }
 
 .comments-section h2 {
@@ -357,10 +394,12 @@ body {
   font-weight: 600;
   margin-bottom: 20px;
   color: #1a1a1a;
+  text-align: left;
 }
 
 #comments-tree {
   margin-top: 16px;
+  text-align: left;
 }
 
 .comment {
@@ -369,6 +408,7 @@ body {
   background: #fafafa;
   border-radius: 6px;
   border-left: 2px solid #e0e0e0;
+  text-align: left;
 }
 
 .comment.collapsed {
@@ -419,6 +459,7 @@ body {
   line-height: 1.5;
   color: #1a1a1a;
   margin-bottom: 8px;
+  text-align: left;
 }
 
 .comment-text p {

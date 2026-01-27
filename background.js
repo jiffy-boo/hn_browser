@@ -118,32 +118,52 @@ async function generateSummary(story, comments) {
 
 // Call Claude API to generate summary
 async function callClaudeAPI(apiKey, story, articleContent, commentsText) {
+  console.log(`[HN Inbox] Generating summary for story: ${story.id} - ${story.title}`);
+
   const prompt = buildSummaryPrompt(story, articleContent, commentsText);
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 2000,
-      messages: [{
-        role: 'user',
-        content: prompt
-      }]
-    })
-  });
+  let response;
+  try {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2000,
+        messages: [{
+          role: 'user',
+          content: prompt
+        }]
+      })
+    });
+  } catch (fetchError) {
+    console.error('[HN Inbox] Network error calling Claude API:', fetchError);
+    throw new Error(`Network error: ${fetchError.message}. Check your internet connection and extension permissions.`);
+  }
+
+  console.log(`[HN Inbox] Claude API response status: ${response.status}`);
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Claude API request failed');
+    let errorMessage = `Claude API error (${response.status})`;
+    try {
+      const error = await response.json();
+      errorMessage = error.error?.message || errorMessage;
+      console.error('[HN Inbox] Claude API error details:', error);
+    } catch (e) {
+      console.error('[HN Inbox] Could not parse error response');
+    }
+    throw new Error(errorMessage);
   }
 
   const data = await response.json();
   const responseText = data.content[0].text;
+
+  console.log('[HN Inbox] Summary generated successfully');
 
   // Parse the response to extract structured summary
   return parseSummaryResponse(responseText);
@@ -241,11 +261,78 @@ function stripHtml(html) {
     .trim();
 }
 
-// Storage helpers
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.set({
-    readStories: [],
-    summaryCache: {},
-    apiKey: ''
-  });
+// Storage helpers - only set defaults if not already set
+chrome.runtime.onInstalled.addListener(async () => {
+  const existing = await chrome.storage.local.get(['readStories', 'summaryCache', 'apiKey', 'filterSettings']);
+
+  const defaults = {
+    readStories: existing.readStories || [],
+    summaryCache: existing.summaryCache || {},
+    apiKey: existing.apiKey || '',
+    filterSettings: existing.filterSettings || {}
+  };
+
+  await chrome.storage.local.set(defaults);
+  console.log('[HN Inbox] Extension installed/updated. Preserved existing settings.');
 });
+
+// Debug/test function - run in service worker console to test API connection
+// Usage: testClaudeConnection()
+async function testClaudeConnection() {
+  console.log('[HN Inbox] Testing Claude API connection...');
+
+  // Check API key
+  const { apiKey } = await chrome.storage.local.get('apiKey');
+  console.log('[HN Inbox] API key exists:', !!apiKey);
+  console.log('[HN Inbox] API key starts with sk-ant-:', apiKey?.startsWith('sk-ant-'));
+  console.log('[HN Inbox] API key length:', apiKey?.length);
+
+  if (!apiKey) {
+    console.error('[HN Inbox] ERROR: No API key found. Set it via the extension popup.');
+    return;
+  }
+
+  // Test API call
+  try {
+    console.log('[HN Inbox] Sending test request to Claude API...');
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 50,
+        messages: [{
+          role: 'user',
+          content: 'Say "API test successful"'
+        }]
+      })
+    });
+
+    console.log('[HN Inbox] Response status:', response.status);
+    console.log('[HN Inbox] Response ok:', response.ok);
+
+    if (!response.ok) {
+      const error = await response.json();
+      console.error('[HN Inbox] API ERROR:', error);
+      console.error('[HN Inbox] Error type:', error.error?.type);
+      console.error('[HN Inbox] Error message:', error.error?.message);
+      return;
+    }
+
+    const data = await response.json();
+    console.log('[HN Inbox] ✅ SUCCESS! Claude responded:', data.content[0].text);
+    console.log('[HN Inbox] Full response:', data);
+  } catch (error) {
+    console.error('[HN Inbox] ❌ FETCH ERROR:', error);
+    console.error('[HN Inbox] This usually means a network or permissions issue');
+    console.error('[HN Inbox] Check that manifest.json includes "https://api.anthropic.com/*" in host_permissions');
+  }
+}
+
+// Make it globally accessible for console testing
+self.testClaudeConnection = testClaudeConnection;

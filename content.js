@@ -10,16 +10,34 @@ const state = {
   filters: {
     minPoints: 0,
     minComments: 0,
-    timeRange: 'all' // 'day', '3days', '7days', 'all'
+    timeRange: 'day' // 'day', '3days', '7days', 'all' - default to 24 hours
   },
-  keyboardHelpVisible: false
+  keyboardHelpVisible: false,
+  filtersCollapsed: false,
+  commentCache: {}, // Cache comments by story ID
+  summaryCache: {} // Cache summaries by story ID (local copy for quick access)
 };
 
 // Initialize the extension
 async function init() {
-  // Load read stories from storage
-  const { readStories = [] } = await chrome.storage.local.get('readStories');
+  // Load read stories, filter settings, and UI state from storage
+  const {
+    readStories = [],
+    filterSettings = {},
+    filtersCollapsed = false,
+    commentCache = {},
+    summaryCache = {}
+  } = await chrome.storage.local.get(['readStories', 'filterSettings', 'filtersCollapsed', 'commentCache', 'summaryCache']);
+
   state.readStories = new Set(readStories);
+  state.filtersCollapsed = filtersCollapsed;
+  state.commentCache = commentCache;
+  state.summaryCache = summaryCache;
+
+  // Load saved filter settings
+  if (filterSettings.minPoints !== undefined) state.filters.minPoints = filterSettings.minPoints;
+  if (filterSettings.minComments !== undefined) state.filters.minComments = filterSettings.minComments;
+  if (filterSettings.timeRange !== undefined) state.filters.timeRange = filterSettings.timeRange;
 
   // Replace the entire page with our custom UI
   document.body.innerHTML = '';
@@ -39,24 +57,31 @@ function createMainUI() {
   container.innerHTML = `
     <div id="hn-inbox">
       <div id="sidebar">
-        <div id="filters-panel">
-          <h2>Filters</h2>
-          <div class="filter-group">
-            <label>Min Points: <span id="points-value">0</span></label>
-            <input type="range" id="points-filter" min="0" max="500" step="10" value="0">
+        <div id="filters-panel" class="${state.filtersCollapsed ? 'collapsed' : ''}">
+          <div class="filters-header">
+            <h2>Filters</h2>
+            <button id="toggle-filters" class="toggle-btn" aria-label="Toggle filters">
+              ${state.filtersCollapsed ? '▼' : '▲'}
+            </button>
           </div>
-          <div class="filter-group">
-            <label>Min Comments: <span id="comments-value">0</span></label>
-            <input type="range" id="comments-filter" min="0" max="200" step="5" value="0">
-          </div>
-          <div class="filter-group">
-            <label>Time Range:</label>
-            <select id="time-filter">
-              <option value="all">All time</option>
-              <option value="day">Last 24 hours</option>
-              <option value="3days">Last 3 days</option>
-              <option value="7days">Last 7 days</option>
-            </select>
+          <div id="filters-content" style="display: ${state.filtersCollapsed ? 'none' : 'block'}">
+            <div class="filter-group">
+              <label for="points-filter">Min Points:</label>
+              <input type="number" id="points-filter" min="0" max="9999" value="${state.filters.minPoints}" placeholder="0">
+            </div>
+            <div class="filter-group">
+              <label for="comments-filter">Min Comments:</label>
+              <input type="number" id="comments-filter" min="0" max="9999" value="${state.filters.minComments}" placeholder="0">
+            </div>
+            <div class="filter-group">
+              <label for="time-filter">Time Range:</label>
+              <select id="time-filter">
+                <option value="all" ${state.filters.timeRange === 'all' ? 'selected' : ''}>All time</option>
+                <option value="day" ${state.filters.timeRange === 'day' ? 'selected' : ''}>Last 24 hours</option>
+                <option value="3days" ${state.filters.timeRange === '3days' ? 'selected' : ''}>Last 3 days</option>
+                <option value="7days" ${state.filters.timeRange === '7days' ? 'selected' : ''}>Last 7 days</option>
+              </select>
+            </div>
           </div>
           <div class="filter-stats">
             <span id="story-count">0</span> stories
@@ -96,20 +121,28 @@ function createMainUI() {
 
   // Set up filter event listeners
   setTimeout(() => {
+    // Toggle filters collapse
+    document.getElementById('toggle-filters').addEventListener('click', () => {
+      toggleFilters();
+    });
+
     document.getElementById('points-filter').addEventListener('input', (e) => {
-      state.filters.minPoints = parseInt(e.target.value);
-      document.getElementById('points-value').textContent = e.target.value;
+      const value = parseInt(e.target.value) || 0;
+      state.filters.minPoints = value;
+      saveFilterSettings();
       applyFilters();
     });
 
     document.getElementById('comments-filter').addEventListener('input', (e) => {
-      state.filters.minComments = parseInt(e.target.value);
-      document.getElementById('comments-value').textContent = e.target.value;
+      const value = parseInt(e.target.value) || 0;
+      state.filters.minComments = value;
+      saveFilterSettings();
       applyFilters();
     });
 
     document.getElementById('time-filter').addEventListener('change', (e) => {
       state.filters.timeRange = e.target.value;
+      saveFilterSettings();
       applyFilters();
     });
 
@@ -179,6 +212,33 @@ function applyFilters() {
 
   renderStoryList();
   updateStoryCount();
+}
+
+// Toggle filters collapse/expand
+function toggleFilters() {
+  state.filtersCollapsed = !state.filtersCollapsed;
+
+  const filtersPanel = document.getElementById('filters-panel');
+  const filtersContent = document.getElementById('filters-content');
+  const toggleBtn = document.getElementById('toggle-filters');
+
+  filtersPanel.classList.toggle('collapsed');
+  filtersContent.style.display = state.filtersCollapsed ? 'none' : 'block';
+  toggleBtn.textContent = state.filtersCollapsed ? '▼' : '▲';
+
+  // Save collapsed state
+  chrome.storage.local.set({ filtersCollapsed: state.filtersCollapsed });
+}
+
+// Save filter settings to Chrome storage
+function saveFilterSettings() {
+  chrome.storage.local.set({
+    filterSettings: {
+      minPoints: state.filters.minPoints,
+      minComments: state.filters.minComments,
+      timeRange: state.filters.timeRange
+    }
+  });
 }
 
 // Render the story list in the sidebar
@@ -288,34 +348,63 @@ async function renderStoryDetail() {
     openBtn.addEventListener('click', () => openArticle());
   }
 
-  // Load comments and build tree structure
+  // Check if we have cached comments
+  const cachedComments = state.commentCache[story.id];
+
   let commentsData = [];
-  if (story.kids && story.kids.length > 0) {
+  if (cachedComments) {
+    // Use cached comments - instant load!
+    console.log(`[HN Inbox] Using cached comments for story ${story.id}`);
+    commentsData = cachedComments.data;
+    document.getElementById('comments-tree').innerHTML = cachedComments.html;
+
+    // Re-attach event listeners for collapse buttons
+    reattachCommentListeners();
+  } else if (story.kids && story.kids.length > 0) {
+    // Fetch comments ONCE (with parallel loading)
+    console.log(`[HN Inbox] Fetching ${story.kids.length} comments in parallel...`);
+    const startTime = performance.now();
+
     commentsData = await fetchCommentTree(story.kids);
-    await renderComments(story.kids);
+
+    const fetchTime = performance.now() - startTime;
+    console.log(`[HN Inbox] Fetched comments in ${(fetchTime / 1000).toFixed(2)}s`);
+
+    // Render from the fetched data (no duplicate fetching!)
+    renderCommentsFromData(commentsData);
+
+    // Cache the comments (both data and rendered HTML)
+    cacheComments(story.id, commentsData, document.getElementById('comments-tree').innerHTML);
   } else {
     document.getElementById('comments-tree').innerHTML = '<div class="empty">No comments yet</div>';
   }
 
-  // Generate AI summary (runs in parallel with comment rendering)
-  generateAndDisplaySummary(story, commentsData);
-}
-
-// Fetch comment tree as data structure (for AI summary)
-async function fetchCommentTree(commentIds) {
-  const comments = [];
-
-  for (const commentId of commentIds) {
-    const comment = await fetchCommentData(commentId);
-    if (comment) {
-      comments.push(comment);
-    }
+  // Check if we have cached summary
+  const cachedSummary = state.summaryCache[story.id];
+  if (cachedSummary) {
+    console.log(`[HN Inbox] Using cached summary for story ${story.id}`);
+    displaySummary(cachedSummary);
+  } else {
+    // Generate AI summary (runs in parallel with comment rendering)
+    generateAndDisplaySummary(story, commentsData);
   }
 
-  return comments;
+  // Preload next story's comments in background
+  preloadNextStory();
 }
 
-// Recursively fetch comment data
+// Fetch comment tree as data structure (for AI summary and rendering)
+// OPTIMIZED: Fetches all comments at each level in parallel
+async function fetchCommentTree(commentIds) {
+  // Fetch all top-level comments in parallel
+  const commentPromises = commentIds.map(id => fetchCommentData(id));
+  const comments = await Promise.all(commentPromises);
+
+  // Filter out null results (deleted/dead comments)
+  return comments.filter(c => c !== null);
+}
+
+// Recursively fetch comment data with parallel loading
 async function fetchCommentData(commentId) {
   const response = await chrome.runtime.sendMessage({ action: 'fetchComment', commentId });
 
@@ -325,15 +414,12 @@ async function fetchCommentData(commentId) {
 
   const comment = response.comment;
 
-  // Fetch replies recursively
-  const replies = [];
+  // Fetch all replies in parallel (not sequentially!)
+  let replies = [];
   if (comment.kids && comment.kids.length > 0) {
-    for (const replyId of comment.kids) {
-      const reply = await fetchCommentData(replyId);
-      if (reply) {
-        replies.push(reply);
-      }
-    }
+    const replyPromises = comment.kids.map(replyId => fetchCommentData(replyId));
+    const allReplies = await Promise.all(replyPromises);
+    replies = allReplies.filter(r => r !== null);
   }
 
   return {
@@ -362,6 +448,15 @@ async function generateAndDisplaySummary(story, comments) {
     }
 
     const summary = response.summary;
+
+    // Cache the summary locally
+    state.summaryCache[story.id] = summary;
+    chrome.storage.local.get('summaryCache', (data) => {
+      const cache = data.summaryCache || {};
+      cache[story.id] = summary;
+      chrome.storage.local.set({ summaryCache: cache });
+    });
+
     displaySummary(summary);
   } catch (error) {
     summaryEl.innerHTML = `<div class="error-message">Failed to generate summary: ${escapeHtml(error.message)}</div>`;
@@ -430,7 +525,69 @@ function scrollToComment(author) {
   }
 }
 
-// Render comment tree
+// Render comment tree from already-fetched data (NO API CALLS)
+// This eliminates duplicate fetching!
+function renderCommentsFromData(commentsData) {
+  const commentsTree = document.getElementById('comments-tree');
+  commentsTree.innerHTML = '';
+
+  for (const commentData of commentsData) {
+    const commentEl = renderCommentFromData(commentData, 0);
+    if (commentEl) {
+      commentsTree.appendChild(commentEl);
+    }
+  }
+}
+
+// Render individual comment from data (NO API CALLS)
+function renderCommentFromData(commentData, depth) {
+  if (!commentData) return null;
+
+  const commentEl = document.createElement('div');
+  commentEl.className = 'comment';
+  commentEl.style.marginLeft = `${depth * 20}px`;
+  commentEl.dataset.commentId = commentData.id;
+
+  const timeAgo = formatTimeAgo(commentData.time);
+
+  commentEl.innerHTML = `
+    <div class="comment-header">
+      <span class="comment-author">${escapeHtml(commentData.by)}</span>
+      <span class="comment-time">${timeAgo}</span>
+      <button class="collapse-btn" aria-label="Collapse thread">[-]</button>
+    </div>
+    <div class="comment-text">${commentData.text || ''}</div>
+    <div class="comment-replies"></div>
+  `;
+
+  // Collapse/expand functionality
+  const collapseBtn = commentEl.querySelector('.collapse-btn');
+  const commentText = commentEl.querySelector('.comment-text');
+  const commentReplies = commentEl.querySelector('.comment-replies');
+
+  collapseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isCollapsed = commentEl.classList.toggle('collapsed');
+    collapseBtn.textContent = isCollapsed ? '[+]' : '[-]';
+    commentText.style.display = isCollapsed ? 'none' : 'block';
+    commentReplies.style.display = isCollapsed ? 'none' : 'block';
+  });
+
+  // Render replies from data (recursively)
+  if (commentData.replies && commentData.replies.length > 0) {
+    for (const replyData of commentData.replies) {
+      const replyEl = renderCommentFromData(replyData, depth + 1);
+      if (replyEl) {
+        commentReplies.appendChild(replyEl);
+      }
+    }
+  }
+
+  return commentEl;
+}
+
+// OLD FUNCTION - kept for backward compatibility with preloading
+// Render comment tree (legacy - fetches from API)
 async function renderComments(commentIds) {
   const commentsTree = document.getElementById('comments-tree');
   commentsTree.innerHTML = '';
@@ -493,6 +650,75 @@ async function renderComment(commentId, depth) {
   }
 
   return commentEl;
+}
+
+// Cache comments for a story
+function cacheComments(storyId, commentsData, commentsHtml) {
+  state.commentCache[storyId] = {
+    data: commentsData,
+    html: commentsHtml
+  };
+
+  // Also save to Chrome storage
+  chrome.storage.local.get('commentCache', (data) => {
+    const cache = data.commentCache || {};
+    cache[storyId] = {
+      data: commentsData,
+      html: commentsHtml,
+      timestamp: Date.now()
+    };
+    chrome.storage.local.set({ commentCache: cache });
+  });
+}
+
+// Re-attach event listeners to cached comment elements
+function reattachCommentListeners() {
+  document.querySelectorAll('.collapse-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const commentEl = btn.closest('.comment');
+      const commentText = commentEl.querySelector('.comment-text');
+      const commentReplies = commentEl.querySelector('.comment-replies');
+
+      const isCollapsed = commentEl.classList.toggle('collapsed');
+      btn.textContent = isCollapsed ? '[+]' : '[-]';
+      commentText.style.display = isCollapsed ? 'none' : 'block';
+      commentReplies.style.display = isCollapsed ? 'none' : 'block';
+    });
+  });
+}
+
+// Preload comments for next story (OPTIMIZED)
+async function preloadNextStory() {
+  const nextIndex = state.selectedStoryIndex + 1;
+  if (nextIndex >= state.filteredStories.length) return;
+
+  const nextStory = state.filteredStories[nextIndex];
+
+  // Only preload if not already cached
+  if (!state.commentCache[nextStory.id] && nextStory.kids && nextStory.kids.length > 0) {
+    console.log(`[HN Inbox] Preloading ${nextStory.kids.length} comments for story ${nextStory.id} in background...`);
+
+    const startTime = performance.now();
+
+    // Fetch comments ONCE with parallel loading
+    const commentsData = await fetchCommentTree(nextStory.kids);
+
+    // Render from data (no duplicate fetching!)
+    const tempContainer = document.createElement('div');
+    for (const commentData of commentsData) {
+      const commentEl = renderCommentFromData(commentData, 0);
+      if (commentEl) {
+        tempContainer.appendChild(commentEl);
+      }
+    }
+
+    // Cache the preloaded comments
+    cacheComments(nextStory.id, commentsData, tempContainer.innerHTML);
+
+    const loadTime = performance.now() - startTime;
+    console.log(`[HN Inbox] Preloaded comments for story ${nextStory.id} in ${(loadTime / 1000).toFixed(2)}s`);
+  }
 }
 
 // Keyboard shortcuts

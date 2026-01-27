@@ -16,7 +16,7 @@ The AI summary feature is now **fully functional**! Here's everything that was a
 
 **API Call Details:**
 - Endpoint: `https://api.anthropic.com/v1/messages`
-- Model: `claude-3-5-sonnet-20241022` (fast, cost-effective)
+- Model: `claude-haiku-4-5-20251001` (fast, cost-effective)
 - Max tokens: 2000 (enough for detailed summaries)
 - Headers: Proper authentication with x-api-key
 
