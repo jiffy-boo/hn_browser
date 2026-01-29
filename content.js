@@ -7,6 +7,7 @@ const state = {
   selectedStoryIndex: 0,
   selectedStory: null,
   readStories: new Set(),
+  notInterestedStories: new Set(), // Stories marked as not interesting
   filters: {
     minPoints: 0,
     minComments: 0,
@@ -17,7 +18,9 @@ const state = {
   commentCache: {}, // Cache comments by story ID
   summaryCache: {}, // Cache summaries by story ID (local copy for quick access)
   summaryStatus: {}, // Track summary loading status: 'loading', 'ready', or null
-  scrollPositions: {} // Remember scroll position for each story ID
+  scrollPositions: {}, // Remember scroll position for each story ID
+  summarized: new Set(), // Stories that have been summarized
+  isSummarizing: false // Flag for batch summarization in progress
 };
 
 // Initialize the extension
@@ -25,14 +28,16 @@ async function init() {
   // Load read stories, filter settings, and UI state from storage
   const {
     readStories = [],
+    notInterestedStories = [],
     filterSettings = {},
     filtersCollapsed = false,
     commentCache = {},
     summaryCache = {},
     scrollPositions = {}
-  } = await chrome.storage.local.get(['readStories', 'filterSettings', 'filtersCollapsed', 'commentCache', 'summaryCache', 'scrollPositions']);
+  } = await chrome.storage.local.get(['readStories', 'notInterestedStories', 'filterSettings', 'filtersCollapsed', 'commentCache', 'summaryCache', 'scrollPositions']);
 
   state.readStories = new Set(readStories);
+  state.notInterestedStories = new Set(notInterestedStories);
   state.filtersCollapsed = filtersCollapsed;
   state.commentCache = commentCache;
   state.summaryCache = summaryCache;
@@ -112,6 +117,8 @@ function createMainUI() {
           <div class="shortcut"><kbd>j</kbd> Navigate down</div>
           <div class="shortcut"><kbd>k</kbd> Navigate up</div>
           <div class="shortcut"><kbd>Enter</kbd> Open selected story</div>
+          <div class="shortcut"><kbd>l</kbd> Mark as not interested</div>
+          <div class="shortcut"><kbd>s</kbd> Summarize all stories</div>
           <div class="shortcut"><kbd>o</kbd> Open article in new tab</div>
           <div class="shortcut"><kbd>e</kbd> Mark as read</div>
           <div class="shortcut"><kbd>r</kbd> Refresh story list</div>
@@ -195,6 +202,9 @@ function applyFilters() {
   };
 
   state.filteredStories = state.stories.filter(story => {
+    // Exclude stories marked as not interesting
+    if (state.notInterestedStories.has(story.id)) return false;
+
     // Points filter
     if (story.score < state.filters.minPoints) return false;
 
@@ -370,43 +380,88 @@ async function renderStoryDetail() {
   if (!story) return;
 
   const mainPanel = document.getElementById('story-detail');
-  mainPanel.innerHTML = '<div class="loading">Loading story details...</div>';
-
   const domain = story.url ? new URL(story.url).hostname.replace('www.', '') : 'news.ycombinator.com';
   const timeAgo = formatTimeAgo(story.time);
   const commentCount = story.descendants || 0;
 
-  let html = `
-    <div class="story-header">
-      <h1>${escapeHtml(story.title)}</h1>
-      <div class="story-metadata">
-        <span class="points">${story.score} points</span>
-        <span class="author">by ${escapeHtml(story.by)}</span>
-        <span class="time">${timeAgo}</span>
-        <span class="domain">${escapeHtml(domain)}</span>
+  // Check if this story has been summarized
+  const isSummarized = state.summarized.has(story.id);
+
+  if (!isSummarized) {
+    // Show metadata only - no loading
+    let html = `
+      <div class="story-header">
+        <h1>${escapeHtml(story.title)}</h1>
+        <div class="story-metadata">
+          <span class="points">${story.score} points</span>
+          <span class="author">by ${escapeHtml(story.by)}</span>
+          <span class="time">${timeAgo}</span>
+          <span class="domain">${escapeHtml(domain)}</span>
+          <span class="comments">${commentCount} comments</span>
+        </div>
+        ${story.url ? `<button id="open-article-btn" class="primary-btn">Open Article</button>` : ''}
       </div>
-      ${story.url ? `<button id="open-article-btn" class="primary-btn">Open Article</button>` : ''}
-    </div>
 
-    <div class="summary-section">
-      <h2>AI Summary</h2>
-      <div id="summary-content" class="summary-loading">
-        <div class="loading">Generating AI summary...</div>
+      <div class="triage-instructions">
+        <p>Press <kbd>l</kbd> to mark as not interested, or press <kbd>s</kbd> to summarize all stories.</p>
+        <p>Use <kbd>j</kbd>/<kbd>k</kbd> to navigate between stories.</p>
       </div>
-    </div>
+    `;
 
-    <div class="comments-section">
-      <h2>Comments (${commentCount})</h2>
-      <div id="comments-tree" class="loading">Loading comments...</div>
-    </div>
-  `;
+    mainPanel.innerHTML = html;
 
-  mainPanel.innerHTML = html;
+    // Set up button listeners
+    const openBtn = document.getElementById('open-article-btn');
+    if (openBtn) {
+      openBtn.addEventListener('click', () => openArticle());
+    }
+  } else {
+    // Story has been summarized - show full content
+    let html = `
+      <div class="story-header">
+        <h1>${escapeHtml(story.title)}</h1>
+        <div class="story-metadata">
+          <span class="points">${story.score} points</span>
+          <span class="author">by ${escapeHtml(story.by)}</span>
+          <span class="time">${timeAgo}</span>
+          <span class="domain">${escapeHtml(domain)}</span>
+        </div>
+        ${story.url ? `<button id="open-article-btn" class="primary-btn">Open Article</button>` : ''}
+      </div>
 
-  // Set up button listeners
-  const openBtn = document.getElementById('open-article-btn');
-  if (openBtn) {
-    openBtn.addEventListener('click', () => openArticle());
+      <div class="summary-section">
+        <h2>AI Summary</h2>
+        <div id="summary-content"></div>
+      </div>
+
+      <div class="comments-section">
+        <h2>Comments (${commentCount})</h2>
+        <div id="comments-tree"></div>
+      </div>
+    `;
+
+    mainPanel.innerHTML = html;
+
+    // Set up button listeners
+    const openBtn = document.getElementById('open-article-btn');
+    if (openBtn) {
+      openBtn.addEventListener('click', () => openArticle());
+    }
+
+    // Load cached comments and summary
+    const cachedComments = state.commentCache[story.id];
+    const cachedSummary = state.summaryCache[story.id];
+
+    if (cachedComments) {
+      document.getElementById('comments-tree').innerHTML = cachedComments.html;
+      reattachCommentListeners();
+    } else {
+      document.getElementById('comments-tree').innerHTML = '<div class="empty">No comments</div>';
+    }
+
+    if (cachedSummary) {
+      displayFullSummary(cachedSummary);
+    }
   }
 
   // Restore scroll position for this story (after DOM updates)
@@ -420,51 +475,6 @@ async function renderStoryDetail() {
       mainPanelElement.scrollTop = 0;
     }
   });
-
-  // Check if we have cached comments
-  const cachedComments = state.commentCache[story.id];
-
-  let commentsData = [];
-  if (cachedComments) {
-    // Use cached comments - instant load!
-    console.log(`[HN Inbox] Using cached comments for story ${story.id}`);
-    commentsData = cachedComments.data;
-    document.getElementById('comments-tree').innerHTML = cachedComments.html;
-
-    // Re-attach event listeners for collapse buttons
-    reattachCommentListeners();
-  } else if (story.kids && story.kids.length > 0) {
-    // Fetch comments ONCE (with parallel loading)
-    console.log(`[HN Inbox] Fetching ${story.kids.length} comments in parallel...`);
-    const startTime = performance.now();
-
-    commentsData = await fetchCommentTree(story.kids);
-
-    const fetchTime = performance.now() - startTime;
-    console.log(`[HN Inbox] Fetched comments in ${(fetchTime / 1000).toFixed(2)}s`);
-
-    // Render from the fetched data (no duplicate fetching!)
-    renderCommentsFromData(commentsData);
-
-    // Cache the comments (both data and rendered HTML)
-    cacheComments(story.id, commentsData, document.getElementById('comments-tree').innerHTML);
-  } else {
-    document.getElementById('comments-tree').innerHTML = '<div class="empty">No comments yet</div>';
-  }
-
-  // Check if we have cached summary
-  const cachedSummary = state.summaryCache[story.id];
-  if (cachedSummary) {
-    console.log(`[HN Inbox] Using cached summary for story ${story.id}`);
-    displayPartialSummary(cachedSummary, false);
-    updateSummaryStatus(story.id, 'ready');
-  } else {
-    // Generate AI summary with progressive loading
-    generateAndDisplaySummary(story, commentsData);
-  }
-
-  // Preload next story's comments AND summary in background
-  preloadNextStory();
 }
 
 // Fetch comment tree as data structure (for AI summary and rendering)
@@ -980,6 +990,14 @@ function setupKeyboardShortcuts() {
         e.preventDefault();
         refreshStories();
         break;
+      case 'l':
+        e.preventDefault();
+        markAsNotInterested();
+        break;
+      case 's':
+        e.preventDefault();
+        summarizeAll();
+        break;
     }
   });
 }
@@ -1027,6 +1045,190 @@ function markAsRead() {
       readStories: Array.from(state.readStories)
     });
   }
+}
+
+// Mark current story as not interested and remove from inbox
+function markAsNotInterested() {
+  if (!state.selectedStory) return;
+
+  const storyId = state.selectedStory.id;
+
+  // Add to not interested set
+  state.notInterestedStories.add(storyId);
+
+  // Save to storage
+  chrome.storage.local.set({
+    notInterestedStories: Array.from(state.notInterestedStories)
+  });
+
+  console.log(`[HN Inbox] Marked story ${storyId} as not interested`);
+
+  // Re-apply filters to remove from filtered list
+  applyFilters();
+
+  // Auto-advance to next story (or previous if this was the last one)
+  if (state.filteredStories.length > 0) {
+    // If we removed the last story, go to the new last story
+    if (state.selectedStoryIndex >= state.filteredStories.length) {
+      selectStory(state.filteredStories.length - 1);
+    } else {
+      // Select the same index (which is now the next story)
+      selectStory(state.selectedStoryIndex);
+    }
+  } else {
+    // No more stories
+    state.selectedStory = null;
+    document.getElementById('story-detail').innerHTML = `
+      <div class="empty-state">
+        <h2>All stories triaged!</h2>
+        <p>Press <kbd>s</kbd> to summarize all remaining stories, or <kbd>r</kbd> to refresh.</p>
+      </div>
+    `;
+  }
+
+  // Update sidebar
+  renderStoryList();
+}
+
+// Summarize all remaining stories in batch
+async function summarizeAll() {
+  if (state.isSummarizing) {
+    console.log('[HN Inbox] Already summarizing...');
+    return;
+  }
+
+  const storiesToSummarize = state.filteredStories.filter(story => !state.summarized.has(story.id));
+
+  if (storiesToSummarize.length === 0) {
+    alert('All visible stories have already been summarized!');
+    return;
+  }
+
+  if (!confirm(`Summarize ${storiesToSummarize.length} stories? This will use API credits.`)) {
+    return;
+  }
+
+  state.isSummarizing = true;
+  console.log(`[HN Inbox] Starting batch summarization of ${storiesToSummarize.length} stories...`);
+
+  const mainPanel = document.getElementById('story-detail');
+
+  for (let i = 0; i < storiesToSummarize.length; i++) {
+    const story = storiesToSummarize[i];
+
+    // Show progress
+    mainPanel.innerHTML = `
+      <div class="summarization-progress">
+        <h2>Summarizing Stories...</h2>
+        <p>Processing story ${i + 1} of ${storiesToSummarize.length}</p>
+        <p><strong>${escapeHtml(story.title)}</strong></p>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: ${((i + 1) / storiesToSummarize.length) * 100}%"></div>
+        </div>
+      </div>
+    `;
+
+    try {
+      await summarizeSingleStory(story);
+      console.log(`[HN Inbox] Summarized story ${i + 1}/${storiesToSummarize.length}: ${story.title}`);
+    } catch (error) {
+      console.error(`[HN Inbox] Failed to summarize story ${story.id}:`, error);
+    }
+  }
+
+  state.isSummarizing = false;
+  console.log('[HN Inbox] Batch summarization complete!');
+
+  // Refresh the current story view
+  if (state.selectedStory) {
+    renderStoryDetail();
+  }
+}
+
+// Summarize a single story (fetch comments, article, generate summary)
+async function summarizeSingleStory(story) {
+  // Fetch comments if needed
+  let commentsData = [];
+  const cachedComments = state.commentCache[story.id];
+
+  if (cachedComments) {
+    commentsData = cachedComments.data;
+  } else if (story.kids && story.kids.length > 0) {
+    commentsData = await fetchCommentTree(story.kids);
+
+    // Render and cache comments using existing renderCommentsFromData approach
+    // Create a temporary container to render into
+    const tempContainer = document.createElement('div');
+    for (const commentData of commentsData) {
+      const commentEl = renderCommentFromData(commentData, 0);
+      if (commentEl) {
+        tempContainer.appendChild(commentEl);
+      }
+    }
+
+    cacheComments(story.id, commentsData, tempContainer.innerHTML);
+  }
+
+  // Generate full AI summary (article + discussion combined)
+  const summaryResponse = await chrome.runtime.sendMessage({
+    action: 'generateSummary',
+    story,
+    comments: commentsData
+  });
+
+  if (summaryResponse.success) {
+    // Cache the summary
+    state.summaryCache[story.id] = summaryResponse.summary;
+    await chrome.storage.local.set({ summaryCache: state.summaryCache });
+
+    // Mark as summarized
+    state.summarized.add(story.id);
+    updateSummaryStatus(story.id, 'ready');
+  } else {
+    console.error(`[HN Inbox] Failed to generate summary for story ${story.id}:`, summaryResponse.error);
+  }
+}
+
+// Display full summary (article + discussion)
+function displayFullSummary(summary) {
+  const summaryEl = document.getElementById('summary-content');
+  if (!summaryEl) return;
+
+  let html = '<div class="summary-content">';
+
+  if (summary.articleSummary) {
+    html += `<p><strong>Article:</strong> ${escapeHtml(summary.articleSummary)}</p>`;
+  }
+
+  if (summary.discussionSummary) {
+    html += `<p><strong>Discussion:</strong> ${escapeHtml(summary.discussionSummary)}</p>`;
+  }
+
+  if (summary.interestingComments && summary.interestingComments.length > 0) {
+    html += '<div class="interesting-comments">';
+    html += '<strong>Interesting Comments:</strong>';
+    html += '<ul>';
+    summary.interestingComments.forEach(comment => {
+      html += `<li>`;
+      html += `<a href="#" class="comment-link" data-author="${escapeHtml(comment.author)}">${escapeHtml(comment.author)}</a>: `;
+      html += `${escapeHtml(comment.reason)}`;
+      html += `</li>`;
+    });
+    html += '</ul>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  summaryEl.innerHTML = html;
+
+  // Re-attach click handlers for interesting comments
+  summaryEl.querySelectorAll('.comment-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const author = e.target.getAttribute('data-author');
+      highlightCommentByAuthor(author);
+    });
+  });
 }
 
 function refreshStories() {

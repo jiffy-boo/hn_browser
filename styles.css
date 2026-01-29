@@ -591,6 +591,67 @@ body {
   color: #d63031;
 }
 
+/* Triage instructions */
+.triage-instructions {
+  margin-top: 32px;
+  padding: 24px;
+  background: #f9f9f9;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
+  text-align: center;
+}
+
+.triage-instructions p {
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #4a4a4a;
+}
+
+.triage-instructions kbd {
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+/* Summarization progress */
+.summarization-progress {
+  padding: 60px 40px;
+  text-align: center;
+}
+
+.summarization-progress h2 {
+  font-size: 24px;
+  font-weight: 600;
+  margin-bottom: 20px;
+  color: #1a1a1a;
+}
+
+.summarization-progress p {
+  font-size: 16px;
+  margin-bottom: 12px;
+  color: #666;
+}
+
+.progress-bar {
+  width: 100%;
+  max-width: 500px;
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  margin: 24px auto 0;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #ff6600;
+  transition: width 0.3s ease;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 10px;
