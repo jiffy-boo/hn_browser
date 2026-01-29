@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const saveBtn = document.getElementById('save-btn');
   const statusEl = document.getElementById('status');
   const resetUsageBtn = document.getElementById('reset-usage-btn');
+  const clearCacheBtn = document.getElementById('clear-cache-btn');
 
   // Load saved API key
   const { apiKey = '' } = await chrome.storage.local.get('apiKey');
@@ -59,6 +60,34 @@ document.addEventListener('DOMContentLoaded', async () => {
       }, 2000);
     } catch (error) {
       showStatus('Failed to reset usage data', 'error');
+    }
+  });
+
+  // Clear all story data (for debugging)
+  clearCacheBtn.addEventListener('click', async () => {
+    if (!confirm('Clear all cached story data?\n\nThis will remove:\n- Comment caches\n- AI summaries\n- Scroll positions\n- Read/uninterested state\n\nYour API key and settings will be preserved.')) {
+      return;
+    }
+
+    try {
+      // Remove all story-related data
+      await chrome.storage.local.remove([
+        'commentCache',
+        'summaryCache',
+        'scrollPositions',
+        'readStories',
+        'notInterestedStories',
+        'notInterestedHistory'
+      ]);
+
+      showStatus('All story data cleared! Refresh the page to see changes.', 'success');
+
+      setTimeout(() => {
+        statusEl.classList.add('hidden');
+      }, 3000);
+    } catch (error) {
+      showStatus('Failed to clear cache', 'error');
+      console.error('Clear cache error:', error);
     }
   });
 

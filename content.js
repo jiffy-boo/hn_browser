@@ -8,6 +8,7 @@ const state = {
   selectedStory: null,
   readStories: new Set(),
   notInterestedStories: new Set(), // Stories marked as not interesting
+  notInterestedHistory: [], // History of removed stories for undo (LIFO stack)
   filters: {
     minPoints: 0,
     minComments: 0,
@@ -29,15 +30,17 @@ async function init() {
   const {
     readStories = [],
     notInterestedStories = [],
+    notInterestedHistory = [],
     filterSettings = {},
     filtersCollapsed = false,
     commentCache = {},
     summaryCache = {},
     scrollPositions = {}
-  } = await chrome.storage.local.get(['readStories', 'notInterestedStories', 'filterSettings', 'filtersCollapsed', 'commentCache', 'summaryCache', 'scrollPositions']);
+  } = await chrome.storage.local.get(['readStories', 'notInterestedStories', 'notInterestedHistory', 'filterSettings', 'filtersCollapsed', 'commentCache', 'summaryCache', 'scrollPositions']);
 
   state.readStories = new Set(readStories);
   state.notInterestedStories = new Set(notInterestedStories);
+  state.notInterestedHistory = notInterestedHistory;
   state.filtersCollapsed = filtersCollapsed;
   state.commentCache = commentCache;
   state.summaryCache = summaryCache;
@@ -110,6 +113,14 @@ function createMainUI() {
         </div>
       </div>
     </div>
+    <div id="summarization-progress-bar" class="hidden">
+      <div class="progress-bar-content">
+        <span id="progress-text">Summarizing...</span>
+        <div class="progress-bar-container">
+          <div id="progress-bar-fill" class="progress-bar-fill"></div>
+        </div>
+      </div>
+    </div>
     <div id="keyboard-help" class="hidden">
       <div class="help-content">
         <h2>Keyboard Shortcuts</h2>
@@ -118,6 +129,7 @@ function createMainUI() {
           <div class="shortcut"><kbd>k</kbd> Navigate up</div>
           <div class="shortcut"><kbd>Enter</kbd> Open selected story</div>
           <div class="shortcut"><kbd>l</kbd> Mark as not interested</div>
+          <div class="shortcut"><kbd>u</kbd> Undo not interested</div>
           <div class="shortcut"><kbd>s</kbd> Summarize all stories</div>
           <div class="shortcut"><kbd>o</kbd> Open article in new tab</div>
           <div class="shortcut"><kbd>e</kbd> Mark as read</div>
@@ -994,6 +1006,10 @@ function setupKeyboardShortcuts() {
         e.preventDefault();
         markAsNotInterested();
         break;
+      case 'u':
+        e.preventDefault();
+        undoNotInterested();
+        break;
       case 's':
         e.preventDefault();
         summarizeAll();
@@ -1056,9 +1072,13 @@ function markAsNotInterested() {
   // Add to not interested set
   state.notInterestedStories.add(storyId);
 
+  // Add to history for undo
+  state.notInterestedHistory.push(storyId);
+
   // Save to storage
   chrome.storage.local.set({
-    notInterestedStories: Array.from(state.notInterestedStories)
+    notInterestedStories: Array.from(state.notInterestedStories),
+    notInterestedHistory: state.notInterestedHistory
   });
 
   console.log(`[HN Inbox] Marked story ${storyId} as not interested`);
@@ -1090,6 +1110,47 @@ function markAsNotInterested() {
   renderStoryList();
 }
 
+// Undo the last "not interested" marking
+function undoNotInterested() {
+  if (state.notInterestedHistory.length === 0) {
+    console.log('[HN Inbox] No stories to undo');
+    return;
+  }
+
+  // Pop the last story from history
+  const storyId = state.notInterestedHistory.pop();
+
+  // Remove from not interested set
+  state.notInterestedStories.delete(storyId);
+
+  // Save to storage
+  chrome.storage.local.set({
+    notInterestedStories: Array.from(state.notInterestedStories),
+    notInterestedHistory: state.notInterestedHistory
+  });
+
+  console.log(`[HN Inbox] Restored story ${storyId}`);
+
+  // Re-apply filters to add story back to list
+  applyFilters();
+
+  // Find and select the restored story
+  const restoredIndex = state.filteredStories.findIndex(s => s.id === storyId);
+  if (restoredIndex !== -1) {
+    selectStory(restoredIndex);
+    scrollToSelectedStory();
+  } else {
+    // Story exists but doesn't match current filters - still restored to notInterestedStories
+    // Just select the first story or stay where we are
+    if (state.filteredStories.length > 0 && state.selectedStoryIndex >= state.filteredStories.length) {
+      selectStory(state.filteredStories.length - 1);
+    }
+  }
+
+  // Update sidebar
+  renderStoryList();
+}
+
 // Summarize all remaining stories in batch
 async function summarizeAll() {
   if (state.isSummarizing) {
@@ -1111,26 +1172,31 @@ async function summarizeAll() {
   state.isSummarizing = true;
   console.log(`[HN Inbox] Starting batch summarization of ${storiesToSummarize.length} stories...`);
 
-  const mainPanel = document.getElementById('story-detail');
+  // Show progress bar at bottom
+  const progressBar = document.getElementById('summarization-progress-bar');
+  const progressText = document.getElementById('progress-text');
+  const progressFill = document.getElementById('progress-bar-fill');
+
+  progressBar.classList.remove('hidden');
 
   for (let i = 0; i < storiesToSummarize.length; i++) {
     const story = storiesToSummarize[i];
 
-    // Show progress
-    mainPanel.innerHTML = `
-      <div class="summarization-progress">
-        <h2>Summarizing Stories...</h2>
-        <p>Processing story ${i + 1} of ${storiesToSummarize.length}</p>
-        <p><strong>${escapeHtml(story.title)}</strong></p>
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: ${((i + 1) / storiesToSummarize.length) * 100}%"></div>
-        </div>
-      </div>
-    `;
+    // Update progress bar
+    progressText.textContent = `Summarizing story ${i + 1} of ${storiesToSummarize.length}: ${story.title.slice(0, 50)}${story.title.length > 50 ? '...' : ''}`;
+    progressFill.style.width = `${((i + 1) / storiesToSummarize.length) * 100}%`;
 
     try {
       await summarizeSingleStory(story);
       console.log(`[HN Inbox] Summarized story ${i + 1}/${storiesToSummarize.length}: ${story.title}`);
+
+      // Update sidebar to show status change
+      renderStoryList();
+
+      // If this is the currently viewed story, refresh to show the summary
+      if (state.selectedStory && state.selectedStory.id === story.id) {
+        renderStoryDetail();
+      }
     } catch (error) {
       console.error(`[HN Inbox] Failed to summarize story ${story.id}:`, error);
     }
@@ -1139,7 +1205,10 @@ async function summarizeAll() {
   state.isSummarizing = false;
   console.log('[HN Inbox] Batch summarization complete!');
 
-  // Refresh the current story view
+  // Hide progress bar
+  progressBar.classList.add('hidden');
+
+  // Refresh the current story view in case it was just summarized
   if (state.selectedStory) {
     renderStoryDetail();
   }
