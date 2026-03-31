@@ -201,6 +201,10 @@ async function loadStories() {
     .map(r => r.story);
 
   applyFilters();
+
+  if (state.filteredStories.length > 0) {
+    selectStory(0);
+  }
 }
 
 // Apply filters and update the story list
